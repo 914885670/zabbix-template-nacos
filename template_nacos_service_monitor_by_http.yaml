@@ -1,0 +1,601 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+  - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+    name: Templates/Applications
+  templates:
+  - uuid: 594aaf8d0029450f80a68ffd648d3625
+    template: Nacos Service Monitor by HTTP
+    name: Nacos Service Monitor by HTTP
+    description: Nacos service registry and configuration health monitoring for Zabbix 7.0. The service catalog is fetched once per minute and split into per-service dependent items; instance details are collected per service at a lower cost. Service and namespace discovery use two small external scripts. No exporter, no Nacos configuration changes and no credentials are required for a default (unauthenticated) Nacos. Tested with Nacos 2.2.1.
+    groups:
+    - name: Templates/Applications
+    items:
+    - uuid: 9b1ac47440fa4302a469f7cb0090a1ef
+      name: Nacos service catalog (raw JSON)
+      type: HTTP_AGENT
+      key: nacos.catalog
+      delay: '{$NACOS.DELAY}'
+      history: 7d
+      value_type: TEXT
+      trends: '0'
+      description: Data source for per-service healthy instance counts. One request per minute covers the whole catalog.
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/ns/catalog/services?hasIpCount=true&withInstances=false&pageNo=1&pageSize=1000&namespaceId={$NACOS.NAMESPACE}&{$NACOS.AUTH}'
+      triggers:
+      - uuid: ffb3b10e5bcf43b89548ad576824fe6c
+        expression: nodata(/Nacos Service Monitor by HTTP/nacos.catalog,{$NACOS.NODATA.PERIOD})=1
+        name: Nacos catalog has no data for {$NACOS.NODATA.PERIOD}
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: No fresh catalog data. Check the collector (proxy/server running the external script) and Nacos reachability.
+    - uuid: 0b76d8cdd7db4acd9262d985189f5709
+      name: Nacos configs (public namespace)
+      type: DEPENDENT
+      key: nacos.config.count
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.totalCount
+      master_item:
+        key: nacos.configs
+      triggers:
+      - uuid: d1ca288b490541eaabaeb0e3a39739e0
+        expression: change(/Nacos Service Monitor by HTTP/nacos.config.count)<-{$NACOS.CONFIG.DROP}
+        name: Nacos config count dropped by more than {$NACOS.CONFIG.DROP} since last check
+        priority: WARNING
+        tags:
+        - tag: scope
+          value: notice
+        description: Configuration entries were removed between two checks. Warning only; confirm whether it was a planned cleanup or a mistake.
+      - uuid: d240a3e847524f0fa23985729338255e
+        expression: last(/Nacos Service Monitor by HTTP/nacos.config.count)<1
+        name: Nacos config count is 0 (possibly wiped)
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: The public namespace has no configuration entries. Check for accidental deletion or a wrong namespace.
+    - uuid: 722a9876a59042208c4f81250481998f
+      name: Nacos config statistics (raw JSON)
+      type: HTTP_AGENT
+      key: nacos.configs
+      delay: 5m
+      history: 14d
+      value_type: TEXT
+      trends: '0'
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/cs/configs?search=accurate&pageNo=1&pageSize=1&dataId=&group=&tenant={$NACOS.NAMESPACE}&{$NACOS.AUTH}'
+    - uuid: 48e33eeada98442896b6cd678451d6f5
+      name: Nacos namespaces (raw JSON)
+      type: HTTP_AGENT
+      key: nacos.namespaces
+      delay: 5m
+      history: 90d
+      value_type: TEXT
+      trends: '0'
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/console/namespaces?{$NACOS.AUTH}'
+    - uuid: 8a3db6bbe2234c62afede9fdf8825639
+      name: Nacos readiness
+      type: HTTP_AGENT
+      key: nacos.readiness
+      history: 90d
+      value_type: TEXT
+      trends: '0'
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/console/health/readiness?{$NACOS.AUTH}'
+      triggers:
+      - uuid: 9b9b3dee3829405baa933c6ebf907ad9
+        expression: nodata(/Nacos Service Monitor by HTTP/nacos.readiness,{$NACOS.NODATA.PERIOD})=1
+        name: Nacos readiness has no data
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: Readiness endpoint returned no data; the Nacos instance may be down or the endpoint is blocked.
+    - uuid: fc47df7b2beb42108197dd9bbfbf3e50
+      name: Nacos client connections
+      type: DEPENDENT
+      key: nacos.server.clients
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.clientCount
+      master_item:
+        key: nacos.server.metrics
+      triggers:
+      - uuid: e4bcdd0d76cf4b079b9da6de5ff86007
+        expression: last(/Nacos Service Monitor by HTTP/nacos.server.clients)<{$NACOS.CLIENT.MIN}
+        name: Nacos client connections below {$NACOS.CLIENT.MIN}
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: Nacos has fewer client connections than expected. Check whether application instances are connecting.
+    - uuid: 4db2c72fe92247da922f228ad2458c70
+      name: Nacos host CPU
+      type: DEPENDENT
+      key: nacos.server.cpu
+      delay: '0'
+      history: 90d
+      value_type: FLOAT
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.cpu
+      master_item:
+        key: nacos.server.metrics
+      triggers:
+      - uuid: 56345d60078c4b15bd4844cf233f6654
+        expression: min(/Nacos Service Monitor by HTTP/nacos.server.cpu,15m)>{$NACOS.CPU.WARN}
+        name: Nacos host CPU utilization high (15 minutes > {$NACOS.CPU.WARN})
+        priority: WARNING
+        description: cpu is the whole-host CPU utilization reported by Nacos (0-1), not the Java process alone. Warning only; baseline is about 3%. Look for GC or config push bursts.
+        tags:
+        - tag: scope
+          value: notice
+        - tag: svc
+          value: nacos
+      - uuid: 07e8dd5f66af4d3e8f8cb8ffcd151fa7
+        expression: min(/Nacos Service Monitor by HTTP/nacos.server.cpu,10m)>{$NACOS.CPU.CRIT}
+        name: Nacos host CPU utilization critical (10 minutes > {$NACOS.CPU.CRIT})
+        priority: HIGH
+        description: Sustained host CPU above 80% (about 3.2 of 4 cores) slows registration and config push. Check GC, threads, and bursts of registrations or large config publishes.
+        tags:
+        - tag: svc
+          value: nacos
+    - uuid: 363f7dc5b4cb49cd9dae68d3548c9b91
+      name: Nacos instances (server)
+      type: DEPENDENT
+      key: nacos.server.instances
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.instanceCount
+      master_item:
+        key: nacos.server.metrics
+    - uuid: f9a2975514854b8c95a5c3ee7c52e898
+      name: Nacos host load average (1m)
+      type: DEPENDENT
+      key: nacos.server.load
+      delay: '0'
+      history: 90d
+      value_type: FLOAT
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.load
+      master_item:
+        key: nacos.server.metrics
+      triggers:
+      - uuid: 76bec33388f84eaa9d2f50cb06e7b9bb
+        expression: min(/Nacos Service Monitor by HTTP/nacos.server.load,15m)>{$NACOS.LOAD.WARN}
+        name: Nacos host load high (15 minutes > {$NACOS.LOAD.WARN})
+        priority: WARNING
+        description: 1-minute load average of the whole host. Sustained above the core count indicates queuing; it is not necessarily caused by Nacos. Check D/R processes and iowait. Warning only.
+        tags:
+        - tag: scope
+          value: notice
+        - tag: svc
+          value: nacos
+      - uuid: f9d3bce421f54dd2bc2dba50903ced20
+        expression: min(/Nacos Service Monitor by HTTP/nacos.server.load,10m)>{$NACOS.LOAD.CRIT}
+        name: Nacos host load critical (10 minutes > {$NACOS.LOAD.CRIT})
+        priority: HIGH
+        description: Load sustained at 1.5x the core count. Registration and config requests will slow down. Check runaway processes, disk I/O, and memory reclaim.
+        tags:
+        - tag: svc
+          value: nacos
+    - uuid: 226e50964539431b9c61202457ddadc9
+      name: Nacos host memory (unusable)
+      type: DEPENDENT
+      key: nacos.server.mem
+      delay: '0'
+      history: 90d
+      value_type: FLOAT
+      description: 'Note: Nacos 2.2.1 computes mem as 1 - integer_division(free/total), so it stays at 1.0 whenever free < total and cannot be used for alerting. Use host-level memory items (vm.memory.utilization, vm.memory.size[available], OOM triggers).'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.mem
+      master_item:
+        key: nacos.server.metrics
+    - uuid: 92d8ab3abff747528763da08e413026a
+      name: Nacos server metrics (raw JSON)
+      type: HTTP_AGENT
+      key: nacos.server.metrics
+      history: 90d
+      value_type: TEXT
+      trends: '0'
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/ns/operator/metrics?onlyStatus=false&{$NACOS.AUTH}'
+      triggers:
+      - uuid: baac4ad290ac4029baa96be75bb2c6c1
+        expression: nodata(/Nacos Service Monitor by HTTP/nacos.server.metrics,{$NACOS.NODATA.PERIOD})=1
+        name: Nacos server metrics has no data
+        priority: WARNING
+        tags:
+        - tag: scope
+          value: notice
+        description: Server metrics endpoint has no data. Check the collector and Nacos.
+    - uuid: e18869f01a324c86906ec1e4d9bf89dc
+      name: Nacos deployment mode
+      type: DEPENDENT
+      key: nacos.server.mode
+      delay: '0'
+      history: 90d
+      value_type: CHAR
+      trends: '0'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.standalone_mode
+      master_item:
+        key: nacos.server.state
+    - uuid: 140effb30825469582bc638c0611fb30
+      name: Nacos services (server)
+      type: DEPENDENT
+      key: nacos.server.services
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.serviceCount
+      master_item:
+        key: nacos.server.metrics
+    - uuid: 6dedeaf76c68408bb2e28d0d7c9e8861
+      name: Nacos server version/mode (raw JSON)
+      type: HTTP_AGENT
+      key: nacos.server.state
+      delay: 5m
+      history: 90d
+      value_type: TEXT
+      trends: '0'
+      timeout: '{$NACOS.TIMEOUT}'
+      url: '{$NACOS.URL}/nacos/v1/console/server/state?{$NACOS.AUTH}'
+      triggers:
+      - uuid: eb49770b26ec437c944092863f4675e6
+        expression: nodata(/Nacos Service Monitor by HTTP/nacos.server.state,15m)=1
+        name: Nacos server state has no data
+        priority: WARNING
+        tags:
+        - tag: scope
+          value: notice
+        description: Server state endpoint has no data. Check the collector and Nacos.
+    - uuid: 8d3ad5c7f84042d1ba2567cccc26d179
+      name: Nacos server status
+      type: DEPENDENT
+      key: nacos.server.status
+      delay: '0'
+      history: 90d
+      value_type: CHAR
+      trends: '0'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.status
+      master_item:
+        key: nacos.server.metrics
+      triggers:
+      - uuid: 6be2cf68906e48d99136d8ff1c450858
+        expression: last(/Nacos Service Monitor by HTTP/nacos.server.status)<>"UP"
+        name: Nacos server status is not UP
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: Nacos reports a status other than UP.
+    - uuid: 3015ccfe98804941a35f2321b7d39741
+      name: Nacos subscriptions
+      type: DEPENDENT
+      key: nacos.server.subscribes
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.subscribeCount
+      master_item:
+        key: nacos.server.metrics
+    - uuid: ab8757172bd44f0ab3b78c7569469676
+      name: Nacos version
+      type: DEPENDENT
+      key: nacos.server.version
+      delay: '0'
+      history: 90d
+      value_type: CHAR
+      trends: '0'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.version
+      master_item:
+        key: nacos.server.state
+    - uuid: f035720d2a4b4759b784cb3ebc54d0cd
+      name: Nacos total services
+      type: DEPENDENT
+      key: nacos.total.services
+      delay: '0'
+      history: 90d
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.count
+      master_item:
+        key: nacos.catalog
+      triggers:
+      - uuid: a103b57e827e49f4993c61a15616cc7a
+        expression: change(/Nacos Service Monitor by HTTP/nacos.total.services)<0
+        name: Nacos service disappeared (service count decreased)
+        priority: WARNING
+        description: Total service count decreased since the previous check. Planned shutdown or scale-in also triggers this, so it is warning-only. A drop larger than {$NACOS.SERVICE.DROP} is handled by a High trigger.
+        tags:
+        - tag: scope
+          value: notice
+        - tag: svc
+          value: nacos
+      - uuid: a8a20f01d8bd495f8b71b39378b7d2fb
+        expression: change(/Nacos Service Monitor by HTTP/nacos.total.services)<-{$NACOS.SERVICE.DROP}
+        name: Nacos service count dropped by more than {$NACOS.SERVICE.DROP} since last check
+        priority: HIGH
+        tags:
+        - tag: svc
+          value: nacos
+        description: Service count dropped by more than {$NACOS.SERVICE.DROP} between two checks. Check for deregistration or Nacos failure.
+    discovery_rules:
+    - uuid: 8886436428b840deae864a1a6373ede5
+      name: Nacos namespace discovery
+      type: EXTERNAL
+      key: nacos.namespace.discovery[{$NACOS.URL},{$NACOS.AUTH}]
+      delay: '{$NACOS.DISCOVERY.DELAY}'
+      lifetime: 3d
+      description: External check nacos.namespace.discovery (bash + wget). Emits non-public namespaces only. The script must be installed on the proxy or server that collects the host.
+      item_prototypes:
+      - uuid: c353abe99b8440e68fc1be80b6c000ff
+        name: Config count {#NS_NAME}
+        type: HTTP_AGENT
+        key: nacos.config.count[{#NS_ID}]
+        delay: 5m
+        history: 90d
+        description: Config count for a non-public namespace (public is covered by nacos.config.count).
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.totalCount
+        url: '{$NACOS.URL}/nacos/v1/cs/configs?search=accurate&pageNo=1&pageSize=1&dataId=&group=&tenant={#NS_ID}&{$NACOS.AUTH}'
+        trigger_prototypes:
+        - uuid: dad9695409bb46a1bddd70475ff0ded5
+          expression: change(/Nacos Service Monitor by HTTP/nacos.config.count[{#NS_ID}])<-{$NACOS.CONFIG.DROP}
+          name: Namespace {#NS_NAME} config count dropped by more than {$NACOS.CONFIG.DROP} since last check
+          priority: WARNING
+          description: Configuration entries were removed from this namespace between two checks. Warning only; confirm whether it was a planned cleanup or a mistake.
+          tags:
+          - tag: namespace
+            value: '{#NS_NAME}'
+          - tag: scope
+            value: notice
+          - tag: svc
+            value: nacos
+    - uuid: d8ced8d250e84f82b65d1872953b129a
+      name: Nacos service discovery
+      type: EXTERNAL
+      key: nacos.service.discovery[{$NACOS.URL},{$NACOS.NAMESPACE},{$NACOS.EXCLUDE},{$NACOS.AUTH}]
+      delay: '{$NACOS.DISCOVERY.DELAY}'
+      lifetime: 3d
+      description: External check nacos.service.discovery (bash + wget). Emits {#GROUP}/{#SERVICE} pairs. The script must be installed on the proxy or server that collects the host.
+      item_prototypes:
+      - uuid: 86f7be3646884d3890198bf136c0ac72
+        name: Healthy instances {#GROUP}/{#SERVICE}
+        type: DEPENDENT
+        key: nacos.service.healthy[{#GROUP},{#SERVICE}]
+        delay: '0'
+        trends: '0'
+        description: Healthy instance count as seen by Nacos. 0 means gateways cannot reach the service.
+        valuemap:
+          name: Nacos service instances
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.serviceList[?(@.groupName=="{#GROUP}" && @.name=="{#SERVICE}")].healthyInstanceCount
+        - type: REGEX
+          parameters:
+          - ^\[(\d+)
+          - \1
+        master_item:
+          key: nacos.catalog
+        trigger_prototypes:
+        - uuid: 8a3bb303d0bc46b69a2edc4db95180cc
+          expression: max(/Nacos Service Monitor by HTTP/nacos.service.healthy[{#GROUP},{#SERVICE}],{$NACOS.UNHEALTHY.WARN:"{#SERVICE}"})=0
+          name: Service {#GROUP}/{#SERVICE} has no healthy instances for {$NACOS.UNHEALTHY.WARN}
+          priority: HIGH
+          description: The service has zero healthy instances in the Nacos registry (process not registered, deregistered, or unhealthy). Duration can be overridden per service with {$NACOS.UNHEALTHY.WARN:"service-name"}.
+          tags:
+          - tag: group
+            value: '{#GROUP}'
+          - tag: service
+            value: '{#SERVICE}'
+          - tag: svc
+            value: nacos
+      - uuid: 1aa13b42d08c4133a89a160a70aabd65
+        name: Healthy instance ratio {#GROUP}/{#SERVICE}
+        type: CALCULATED
+        key: nacos.service.healthy_pct[{#GROUP},{#SERVICE}]
+        delay: 3m
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        params: 100*last(//nacos.service.healthy[{#GROUP},{#SERVICE}])/(last(//nacos.service.instances[{#GROUP},{#SERVICE}])+(last(//nacos.service.instances[{#GROUP},{#SERVICE}])=0))
+      - uuid: 4d5b96c3774c4f909fc6d7aacb4a3e28
+        name: Instance details {#GROUP}/{#SERVICE}
+        type: HTTP_AGENT
+        key: nacos.service.hosts[{#GROUP},{#SERVICE}]
+        delay: '{$NACOS.DELAY}'
+        history: 1d
+        value_type: TEXT
+        trends: '0'
+        description: 'Per-instance details (hosts[]: ip/healthy/enabled/clusterName). 1 day of history is kept to identify the unhealthy instance.'
+        url: '{$NACOS.URL}/nacos/v1/ns/instance/list?serviceName={#GROUP}@@{#SERVICE}&namespaceId={$NACOS.NAMESPACE}&{$NACOS.AUTH}'
+      - uuid: abe6387d03f94d17a55460f33f33a28d
+        name: Instances {#GROUP}/{#SERVICE}
+        type: DEPENDENT
+        key: nacos.service.instances[{#GROUP},{#SERVICE}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.serviceList[?(@.groupName=="{#GROUP}" && @.name=="{#SERVICE}")].ipCount
+        - type: REGEX
+          parameters:
+          - ^\[(\d+)
+          - \1
+        master_item:
+          key: nacos.catalog
+      - uuid: c473381e586040f1a1c3cae036c70f95
+        name: Protection threshold flag {#GROUP}/{#SERVICE}
+        type: DEPENDENT
+        key: nacos.service.trigger_flag[{#GROUP},{#SERVICE}]
+        delay: '0'
+        history: 14d
+        value_type: CHAR
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.serviceList[?(@.groupName=="{#GROUP}" && @.name=="{#SERVICE}")].triggerFlag
+        - type: REGEX
+          parameters:
+          - ^\["([a-z]+)"
+          - \1
+        master_item:
+          key: nacos.catalog
+        trigger_prototypes:
+        - uuid: 86200b6b00704f71bb2b79017b5c66ad
+          expression: last(/Nacos Service Monitor by HTTP/nacos.service.trigger_flag[{#GROUP},{#SERVICE}])="true"
+          name: Service {#GROUP}/{#SERVICE} protection threshold triggered (triggerFlag=true)
+          priority: WARNING
+          tags:
+          - tag: group
+            value: '{#GROUP}'
+          - tag: service
+            value: '{#SERVICE}'
+          - tag: svc
+            value: nacos
+          description: Nacos protection threshold (triggerFlag) is active. Protection mode can hide unhealthy instances from callers; verify the service.
+      - uuid: c447888393b64108adf6eff3803954ed
+        name: Unhealthy instances {#GROUP}/{#SERVICE}
+        type: DEPENDENT
+        key: nacos.service.unhealthy[{#GROUP},{#SERVICE}]
+        delay: '0'
+        value_type: TEXT
+        trends: '0'
+        description: IP list of instances with healthy=false; empty value is [].
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.hosts[?(!@.healthy)].ip
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '[]'
+        master_item:
+          key: nacos.service.hosts[{#GROUP},{#SERVICE}]
+        trigger_prototypes:
+        - uuid: 56053d69420d4bd491b8e3da2f40db95
+          expression: last(/Nacos Service Monitor by HTTP/nacos.service.unhealthy[{#GROUP},{#SERVICE}])<>"[]"
+          name: Service {#GROUP}/{#SERVICE} has unhealthy instances
+          event_name: Service {#GROUP}/{#SERVICE} has unhealthy instance(s) {ITEM.LASTVALUE}
+          priority: HIGH
+          description: One or more instances report healthy=false (heartbeat timeout, process failure, or manual deregistration). The event value lists the affected IPs. This fires even when the healthy ratio is still above the threshold. Check the instance in the Nacos console.
+          tags:
+          - tag: group
+            value: '{#GROUP}'
+          - tag: service
+            value: '{#SERVICE}'
+          - tag: svc
+            value: nacos
+      trigger_prototypes:
+      - uuid: 8c77e7e5ac284dfabb39e1f05c0ad4cc
+        expression: last(/Nacos Service Monitor by HTTP/nacos.service.instances[{#GROUP},{#SERVICE}])>0 and last(/Nacos Service Monitor by HTTP/nacos.service.healthy_pct[{#GROUP},{#SERVICE}])<{$NACOS.HEALTHY.MIN.PCT}
+        name: Service {#GROUP}/{#SERVICE} healthy instances below {$NACOS.HEALTHY.MIN.PCT}%
+        priority: HIGH
+        tags:
+        - tag: group
+          value: '{#GROUP}'
+        - tag: service
+          value: '{#SERVICE}'
+        - tag: svc
+          value: nacos
+        description: Healthy instance ratio is below {$NACOS.HEALTHY.MIN.PCT}%.
+    tags:
+    - tag: class
+      value: application
+    - tag: target
+      value: nacos
+    macros:
+    - macro: '{$NACOS.AUTH}'
+      description: Extra query string for authentication, e.g. username=..&password=.. or accessToken=..; leave empty when auth is disabled. Appended to every Nacos API URL.
+    - macro: '{$NACOS.CLIENT.MIN}'
+      value: '1'
+      description: Minimum expected client connections.
+    - macro: '{$NACOS.CONFIG.DROP}'
+      value: '10'
+      description: Config count drop since the previous check that is considered abnormal.
+    - macro: '{$NACOS.CPU.CRIT}'
+      value: '0.8'
+      description: Whole-host CPU utilization critical threshold (0-1, 0.8 = 80%; 10-minute min). Sends email.
+    - macro: '{$NACOS.CPU.WARN}'
+      value: '0.6'
+      description: Whole-host CPU utilization warning threshold (0-1, 0.6 = 60%; 15-minute min). Daily report only.
+    - macro: '{$NACOS.DELAY}'
+      value: 1m
+      description: Collection interval for instance-level metrics.
+    - macro: '{$NACOS.DISCOVERY.DELAY}'
+      value: 1h
+      description: Service and namespace discovery interval.
+    - macro: '{$NACOS.EXCLUDE}'
+      value: ^$
+      description: Regex of service names to exclude from discovery; ^$ excludes only the empty name.
+    - macro: '{$NACOS.HEALTHY.MIN.PCT}'
+      value: '50'
+      description: Alert when the healthy instance ratio falls below this percentage.
+    - macro: '{$NACOS.LOAD.CRIT}'
+      value: '6.0'
+      description: Whole-host load critical threshold (1-minute load average; 6.0 = 1.5x 4 cores). Adjust to the CPU count.
+    - macro: '{$NACOS.LOAD.WARN}'
+      value: '4.0'
+      description: Whole-host load warning threshold (4.0 = 1x 4 cores). Adjust to the CPU count. Daily report only.
+    - macro: '{$NACOS.NAMESPACE}'
+      description: Namespace ID; empty = public.
+    - macro: '{$NACOS.NODATA.PERIOD}'
+      value: 5m
+      description: No-data period for master items.
+    - macro: '{$NACOS.SERVICE.DROP}'
+      value: '2'
+      description: Service count drop since the previous check that is considered abnormal.
+    - macro: '{$NACOS.TIMEOUT}'
+      value: 10s
+      description: HTTP request timeout.
+    - macro: '{$NACOS.UNHEALTHY.WARN}'
+      value: 5m
+      description: 'Duration with zero healthy instances before alerting. Can be overridden per service: {$NACOS.UNHEALTHY.WARN:"service-name"}=15m.'
+    - macro: '{$NACOS.URL}'
+      value: http://127.0.0.1:8848
+      description: Nacos base URL, without a trailing slash.
+    valuemaps:
+    - uuid: 9b8337537f9f4b1389899e0c993af435
+      name: Nacos service instances
+      mappings:
+      - value: '0'
+        newvalue: offline
+      - type: IN_RANGE
+        value: 1-9999
+        newvalue: online

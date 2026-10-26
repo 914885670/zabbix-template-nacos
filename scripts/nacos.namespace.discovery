@@ -1,0 +1,28 @@
+#!/bin/bash
+# LLD data source for Nacos namespace discovery.
+# Usage: nacos.namespace.discovery[<nacos_url>,<auth_query>]
+# Output: {"data":[{"{#NS_ID}":"...","{#NS_NAME}":"..."}, ...]}
+# Only non-public namespaces are emitted; the public namespace is covered by the
+# global nacos.config.count item. Runs on the Zabbix server or proxy (wget only).
+url="$1"; auth="$2"
+if [ -z "$url" ]; then echo '{"data":[]}'; exit 0; fi
+q="${url}/nacos/v1/console/namespaces"
+[ -n "$auth" ] && q="${q}?${auth}"
+j=$(wget -q -O- -T 15 "$q" 2>/dev/null)
+if [ -z "$j" ]; then echo '{"data":[]}'; exit 0; fi
+recs=$(printf '%s' "$j" | sed 's/{"namespace":/\n{"namespace":/g')
+out=""; seen=""
+while IFS= read -r rec; do
+  case "$rec" in *'"namespace":"'*) ;; *) continue;; esac
+  id=$(printf '%s' "$rec" | sed -n 's/.*"namespace":"\([^"]*\)".*/\1/p')
+  nm=$(printf '%s' "$rec" | sed -n 's/.*"namespaceShowName":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && continue
+  [ -z "$nm" ] && nm="$id"
+  case " $seen " in *" $id "*) continue;; esac
+  seen="$seen $id"
+  it="{\"{#NS_ID}\":\"$id\",\"{#NS_NAME}\":\"$nm\"}"
+  if [ -n "$out" ]; then out="${out},${it}"; else out="$it"; fi
+done <<EOF
+$recs
+EOF
+printf '{"data":[%s]}\n' "$out"

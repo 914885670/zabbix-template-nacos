@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+scripts/nacos.service.discovery text eol=lf
+scripts/nacos.namespace.discovery text eol=lf
+*.bat text eol=crlf

@@ -1,0 +1,29 @@
+#!/bin/bash
+# LLD data source for Nacos service discovery.
+# Usage: nacos.service.discovery[<nacos_url>,<namespace_id>,<exclude_regex>,<auth_query>]
+# Output: {"data":[{"{#GROUP}":"...","{#SERVICE}":"..."}, ...]}
+# Runs on the Zabbix server or proxy. Alpine proxy images have wget, but no curl/jq/python3.
+url="$1"; ns="$2"; excl="$3"; auth="$4"
+if [ -z "$url" ]; then echo '{"data":[]}'; exit 0; fi
+q="${url}/nacos/v1/ns/catalog/services?hasIpCount=true&withInstances=false&pageNo=1&pageSize=1000&namespaceId=${ns}"
+[ -n "$auth" ] && q="${q}&${auth}"
+j=$(wget -q -O- -T 15 "$q" 2>/dev/null)
+if [ -z "$j" ]; then echo '{"data":[]}'; exit 0; fi
+recs=$(printf '%s' "$j" | sed 's/{"name":"/\n{"name":"/g')
+out=""; seen=""
+while IFS= read -r rec; do
+  case "$rec" in *'"name":"'*) ;; *) continue;; esac
+  n=$(printf '%s' "$rec" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+  g=$(printf '%s' "$rec" | sed -n 's/.*"groupName":"\([^"]*\)".*/\1/p')
+  [ -z "$n" ] && continue
+  [ -z "$g" ] && g="DEFAULT_GROUP"
+  if [ -n "$excl" ] && printf '%s' "$n" | grep -qE -- "$excl"; then continue; fi
+  k="$g@@$n"
+  case " $seen " in *" $k "*) continue;; esac
+  seen="$seen $k"
+  it="{\"{#GROUP}\":\"$g\",\"{#SERVICE}\":\"$n\"}"
+  if [ -n "$out" ]; then out="${out},${it}"; else out="$it"; fi
+done <<EOF
+$recs
+EOF
+printf '{"data":[%s]}\n' "$out"
